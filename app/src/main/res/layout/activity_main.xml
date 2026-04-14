@@ -56,6 +56,13 @@
             android:textAppearance="@style/TextAppearance.Material3.BodyLarge" />
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/autoDetectButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Detectează automat imprimanta" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/openPrinterPageButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

@@ -14,20 +14,32 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.example.phaserhelper.databinding.ActivityMainBinding
+import java.io.BufferedReader
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.InetAddress
+import java.net.URL
+import java.util.Locale
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private val prefs by lazy { getSharedPreferences("phaser_helper", Context.MODE_PRIVATE) }
+    private val executor = Executors.newSingleThreadExecutor()
 
     private val pickPdfLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: SecurityException) {
+                // Unele pickere nu oferă permisiune persistabilă; printul merge oricum pentru sesiunea curentă.
+            }
             printPdf(uri)
         }
     }
@@ -52,6 +64,10 @@ class MainActivity : AppCompatActivity() {
             toast("Imprimanta a fost salvată.")
         }
 
+        binding.autoDetectButton.setOnClickListener {
+            autoDetectPrinter()
+        }
+
         binding.openPrinterPageButton.setOnClickListener {
             val address = binding.printerAddressInput.text?.toString()?.trim().orEmpty()
             if (address.isBlank()) {
@@ -70,14 +86,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun refreshStatus() {
-        val printer = prefs.getString(KEY_PRINTER_ADDRESS, null)
-        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        val wifiInfo = wifiManager.connectionInfo
-        val ssid = wifiInfo?.ssid?.removePrefix("\"")?.removeSuffix("\"") ?: "necunoscut"
+    override fun onDestroy() {
+        super.onDestroy()
+        executor.shutdownNow()
+    }
 
+    private fun refreshStatus(extra: String? = null) {
+        val printer = prefs.getString(KEY_PRINTER_ADDRESS, null)
+        val ssid = currentSsid()
         val printerText = if (printer.isNullOrBlank()) "nesetată" else printer
-        binding.statusText.text = "Status: imprimantă $printerText | Wi‑Fi curent: $ssid"
+        val suffix = if (extra.isNullOrBlank()) "" else " | $extra"
+        binding.statusText.text = "Status: imprimantă $printerText | Wi‑Fi curent: $ssid$suffix"
+    }
+
+    private fun currentSsid(): String {
+        return try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            val wifiInfo = wifiManager.connectionInfo
+            wifiInfo?.ssid?.removePrefix(""")?.removeSuffix(""") ?: "necunoscut"
+        } catch (_: SecurityException) {
+            "fără acces Wi‑Fi"
+        } catch (_: Exception) {
+            "necunoscut"
+        }
     }
 
     private fun openPrinterWebPage(address: String) {
@@ -87,6 +118,83 @@ class MainActivity : AppCompatActivity() {
         }
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
         startActivity(intent)
+    }
+
+    private fun autoDetectPrinter() {
+        binding.autoDetectButton.isEnabled = false
+        binding.autoDetectButton.text = "Se caută imprimanta..."
+        refreshStatus("scanare în curs")
+
+        executor.execute {
+            val localIp = getLocalIpv4Address()
+            val subnetPrefix = localIp?.substringBeforeLast('.')
+            if (subnetPrefix.isNullOrBlank()) {
+                runOnUiThread {
+                    binding.autoDetectButton.isEnabled = true
+                    binding.autoDetectButton.text = "Detectează automat imprimanta"
+                    refreshStatus("nu pot determina subrețeaua")
+                    toast("Nu pot determina rețeaua Wi‑Fi curentă.")
+                }
+                return@execute
+            }
+
+            var found: String? = null
+            for (host in 1..254) {
+                val ip = "$subnetPrefix.$host"
+                if (looksLikeXeroxPrinter(ip)) {
+                    found = ip
+                    break
+                }
+            }
+
+            runOnUiThread {
+                binding.autoDetectButton.isEnabled = true
+                binding.autoDetectButton.text = "Detectează automat imprimanta"
+                if (found != null) {
+                    binding.printerAddressInput.setText(found)
+                    prefs.edit().putString(KEY_PRINTER_ADDRESS, found).apply()
+                    refreshStatus("detectată automat")
+                    toast("Am găsit imprimanta la $found")
+                } else {
+                    refreshStatus("nu am găsit imprimanta automat")
+                    toast("Nu am găsit automat imprimanta. Introdu IP-ul manual.")
+                }
+            }
+        }
+    }
+
+    private fun getLocalIpv4Address(): String? {
+        return try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            val intIp = wifiManager.connectionInfo?.ipAddress ?: return null
+            val b1 = intIp and 0xff
+            val b2 = intIp shr 8 and 0xff
+            val b3 = intIp shr 16 and 0xff
+            val b4 = intIp shr 24 and 0xff
+            "$b1.$b2.$b3.$b4"
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun looksLikeXeroxPrinter(ip: String): Boolean {
+        return try {
+            val reachable = InetAddress.getByName(ip).isReachable(120)
+            if (!reachable) return false
+
+            val connection = (URL("http://$ip/").openConnection() as HttpURLConnection).apply {
+                connectTimeout = 350
+                readTimeout = 350
+                instanceFollowRedirects = true
+                requestMethod = "GET"
+            }
+            connection.inputStream.use { input ->
+                val body = BufferedReader(InputStreamReader(input)).readText().lowercase(Locale.ROOT)
+                body.contains("xerox") || body.contains("phaser") || body.contains("3020")
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun printPdf(uri: Uri) {

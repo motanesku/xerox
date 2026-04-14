@@ -3,6 +3,7 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
     <application
         android:allowBackup="true"
@@ -10,7 +11,7 @@
         android:label="Phaser 3020 Helper"
         android:roundIcon="@drawable/ic_printer"
         android:supportsRtl="true"
-        android:theme="@style/Theme.PhaserHelper">    
+        android:theme="@style/Theme.PhaserHelper">
         <activity
             android:name=".MainActivity"
             android:exported="true">
